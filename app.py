@@ -351,19 +351,17 @@ if st.session_state.call_mode:
         if user_text and user_text.strip():
             handle_user_message(user_text)
 else:
-    col1, col2 = st.columns([1, 6])
-    with col1:
-        st.write("")
-        audio_bytes = audio_recorder(text="", icon_size="2x", key="recorder", pause_threshold=2.0)
-    with col2:
-        text_input = st.chat_input("Message Hebo — trading, mindset, code, anything...")
+    with st.popover("🎤 Voice input"):
+        audio_bytes = audio_recorder(
+            text="Tap to speak", icon_size="2x", key="recorder", pause_threshold=2.0
+        )
+        if audio_bytes:
+            with st.spinner("🎙️ Transcribing..."):
+                voice_text = transcribe_audio(audio_bytes)
+            if voice_text and voice_text.strip():
+                handle_user_message(voice_text)
+                st.rerun()
 
-    user_text = None
-    if audio_bytes:
-        with st.spinner("🎙️ Transcribing..."):
-            user_text = transcribe_audio(audio_bytes)
+    text_input = st.chat_input("Message Hebo — trading, mindset, code, anything...")
     if text_input:
-        user_text = text_input
-
-    if user_text:
-        handle_user_message(user_text)
+        handle_user_message(text_input)
