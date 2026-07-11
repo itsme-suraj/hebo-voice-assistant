@@ -17,6 +17,7 @@ import datetime
 import io
 import json
 import os
+import time
 import uuid
 
 import streamlit as st
@@ -33,19 +34,6 @@ st.set_page_config(page_title="Hebo — AI Assistant", page_icon="🤖", layout=
 CUSTOM_CSS = """
 <style>
 #MainMenu, footer, header {visibility: hidden;}
-.stApp { background: #0e0f13; }
-
-section[data-testid="stSidebar"] {
-    background: #16171d;
-    border-right: 1px solid #26272f;
-}
-section[data-testid="stSidebar"] .stButton button {
-    width: 100%; text-align: left; background: transparent;
-    color: #d6d6da; border: 1px solid #2a2b33; border-radius: 8px;
-}
-section[data-testid="stSidebar"] .stButton button:hover {
-    background: #22232c; border-color: #3a3b45; color: #fff;
-}
 
 h1 {
     background: linear-gradient(90deg, #7dd3fc, #a78bfa, #f472b6);
@@ -54,24 +42,18 @@ h1 {
 }
 
 div[data-testid="stChatMessage"] {
-    background: #181920; border: 1px solid #24252d; border-radius: 14px;
+    border: 1px solid #262730; border-radius: 14px;
     padding: 4px 6px; margin-bottom: 10px;
 }
-
-.stChatInput textarea { background: #181920 !important; color: #eaeaea !important; }
 
 .hebo-badge {
     display: inline-block; padding: 2px 10px; border-radius: 999px;
     background: #1f2937; color: #93c5fd; font-size: 12px; margin-right: 6px;
 }
 .call-status {
-    text-align: center; font-size: 15px; color: #9ca3af; margin-top: 6px;
+    text-align: center; font-size: 15px; opacity: 0.75; margin-top: 6px;
 }
 </style>
-<script>
-    const chatEl = window.parent.document.querySelector('section.main');
-    if (chatEl) { chatEl.scrollTop = chatEl.scrollHeight; }
-</script>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
@@ -264,6 +246,17 @@ def get_hebo_response(msgs, model):
     return msg.content
 
 
+def type_out(placeholder, text: str, delay: float = 0.015):
+    """Renders text word-by-word for a typewriter effect, like other AI chat apps."""
+    shown = ""
+    words = text.split(" ")
+    for i, word in enumerate(words):
+        shown += word + (" " if i < len(words) - 1 else "")
+        placeholder.markdown(shown + "▌")
+        time.sleep(delay)
+    placeholder.markdown(shown)
+
+
 def handle_user_message(user_text: str):
     with st.chat_message("user", avatar="🧑"):
         st.markdown(user_text)
@@ -275,7 +268,8 @@ def handle_user_message(user_text: str):
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("💭 Hebo is thinking..."):
             reply = get_hebo_response(messages, st.session_state.model_choice)
-        st.markdown(reply)
+        placeholder = st.empty()
+        type_out(placeholder, reply)
         messages.append({"role": "assistant", "content": reply})
 
         if st.session_state.voice_enabled:
@@ -341,19 +335,21 @@ for m in messages[1:]:
 # INPUT AREA — call mode vs normal mode
 # ----------------------------------------------------------------------
 if st.session_state.call_mode:
-    st.markdown('<p class="call-status">📞 Call mode is live — Hebo is listening. Just speak, pause when done, and it replies out loud, then listens again automatically.</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="call-status">📞 Call mode — tap the mic, speak, then pause. '
+        'Hebo replies out loud. Tap again for your next turn.</p>',
+        unsafe_allow_html=True,
+    )
     c1, c2, c3 = st.columns([2, 1, 2])
     with c2:
         audio_bytes = audio_recorder(
-            text="", icon_size="3x", key="call_recorder",
-            pause_threshold=2.0, energy_threshold=0.01, auto_start=True,
+            text="", icon_size="3x", key="call_recorder", pause_threshold=2.0
         )
     if audio_bytes:
-        with st.spinner("🎙️ Listening..."):
+        with st.spinner("🎙️ Transcribing..."):
             user_text = transcribe_audio(audio_bytes)
         if user_text and user_text.strip():
             handle_user_message(user_text)
-        st.rerun()
 else:
     col1, col2 = st.columns([1, 6])
     with col1:
