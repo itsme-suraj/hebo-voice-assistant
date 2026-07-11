@@ -1,7 +1,19 @@
-# 🤖 Hebo — AI Voice Assistant
+# 🤖 Hebo — AI Voice Assistant (v2)
 
 Hebo is a free, fast, voice-enabled AI assistant built with Streamlit. Talk to it or type to
 it, and it talks back — with live web search built in so it isn't limited to stale knowledge.
+
+**v2 highlights:**
+- **📞 Call mode** — hands-free back-and-forth: Hebo listens automatically, you speak, it
+  replies out loud, then starts listening again on its own (no re-clicking a mic button).
+- **Multiple chats** — a sidebar like ChatGPT/Claude, with "New chat", switching between past
+  chats, and deleting old ones.
+- **Model switcher** — pick "Smart (70B)" for best quality or "Fast (8B)" for near-instant
+  replies.
+- **Specialist persona** — Hebo is tuned to be sharp on trading/markets (with a built-in
+  financial-advice disclaimer), wealth-building & success mindset coaching, and expert-level
+  coding help.
+- **Custom dark UI** — styled chat bubbles, gradient title, no default Streamlit chrome.
 
 **Why it's free & fast:**
 | Part | Tool | Cost |
