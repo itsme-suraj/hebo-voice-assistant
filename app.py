@@ -187,14 +187,22 @@ AVAILABLE_FUNCTIONS = {"web_search": web_search}
 # ----------------------------------------------------------------------
 # STT / TTS
 # ----------------------------------------------------------------------
-def transcribe_audio(audio_bytes: bytes) -> str:
+MIN_AUDIO_BYTES = 4000  # filters out empty/near-silent blips (esp. from auto_start call mode)
+                         # before they ever reach the Groq API
+
+
+def transcribe_audio(audio_bytes: bytes) -> str | None:
+    """Returns the transcript, or None if there wasn't enough real audio to transcribe."""
+    if not audio_bytes or len(audio_bytes) < MIN_AUDIO_BYTES:
+        return None
     try:
         transcription = client.audio.transcriptions.create(
             file=("audio.wav", audio_bytes), model=WHISPER_MODEL
         )
         return transcription.text
     except Exception as e:
-        return f"[Transcription error: {e}]"
+        st.toast(f"Transcription error: {e}", icon="⚠️")
+        return None
 
 
 def synthesize_speech(text: str) -> bytes:
@@ -228,7 +236,20 @@ def get_hebo_response(msgs, model):
     msg = response.choices[0].message
 
     if msg.tool_calls:
-        msgs.append(msg)
+        msgs.append(
+            {
+                "role": "assistant",
+                "content": msg.content,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
+            }
+        )
         for tool_call in msg.tool_calls:
             fn_name = tool_call.function.name
             fn_args = json.loads(tool_call.function.arguments)
@@ -330,7 +351,7 @@ if st.session_state.call_mode:
     if audio_bytes:
         with st.spinner("🎙️ Listening..."):
             user_text = transcribe_audio(audio_bytes)
-        if user_text and not user_text.startswith("[Transcription error") and user_text.strip():
+        if user_text and user_text.strip():
             handle_user_message(user_text)
         st.rerun()
 else:
