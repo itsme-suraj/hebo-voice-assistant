@@ -1,12 +1,15 @@
 """
-Hebo — AI Voice Assistant
-Free, fast, and deployable on Streamlit Community Cloud.
+Hebo — AI Voice Assistant (v2)
+Free, fast, deployable on Streamlit Community Cloud.
 
 Stack (all free tiers):
-- Brain: Groq (Llama 3.3 70B) — extremely fast inference, free API
+- Brain: Groq (Llama 3.3 70B / 3.1 8B) — extremely fast inference, free API
 - Ears (Speech-to-Text): Groq Whisper Large v3 Turbo
 - Mouth (Text-to-Speech): gTTS (Google Translate TTS, free, no key needed)
 - Tools: DuckDuckGo web search (free, no key needed)
+
+v2 additions: call-style voice mode, multi-chat sidebar (like ChatGPT/Claude),
+dark custom UI, model switcher, specialist persona (trading / wealth mindset / coding).
 """
 
 import base64
@@ -14,6 +17,7 @@ import datetime
 import io
 import json
 import os
+import uuid
 
 import streamlit as st
 from audio_recorder_streamlit import audio_recorder
@@ -22,13 +26,64 @@ from groq import Groq
 from gtts import gTTS
 
 # ----------------------------------------------------------------------
+# PAGE CONFIG + THEME
+# ----------------------------------------------------------------------
+st.set_page_config(page_title="Hebo — AI Assistant", page_icon="🤖", layout="wide")
+
+CUSTOM_CSS = """
+<style>
+#MainMenu, footer, header {visibility: hidden;}
+.stApp { background: #0e0f13; }
+
+section[data-testid="stSidebar"] {
+    background: #16171d;
+    border-right: 1px solid #26272f;
+}
+section[data-testid="stSidebar"] .stButton button {
+    width: 100%; text-align: left; background: transparent;
+    color: #d6d6da; border: 1px solid #2a2b33; border-radius: 8px;
+}
+section[data-testid="stSidebar"] .stButton button:hover {
+    background: #22232c; border-color: #3a3b45; color: #fff;
+}
+
+h1 {
+    background: linear-gradient(90deg, #7dd3fc, #a78bfa, #f472b6);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    font-weight: 800;
+}
+
+div[data-testid="stChatMessage"] {
+    background: #181920; border: 1px solid #24252d; border-radius: 14px;
+    padding: 4px 6px; margin-bottom: 10px;
+}
+
+.stChatInput textarea { background: #181920 !important; color: #eaeaea !important; }
+
+.hebo-badge {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    background: #1f2937; color: #93c5fd; font-size: 12px; margin-right: 6px;
+}
+.call-status {
+    text-align: center; font-size: 15px; color: #9ca3af; margin-top: 6px;
+}
+</style>
+<script>
+    const chatEl = window.parent.document.querySelector('section.main');
+    if (chatEl) { chatEl.scrollTop = chatEl.scrollHeight; }
+</script>
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+# ----------------------------------------------------------------------
 # CONFIG
 # ----------------------------------------------------------------------
-st.set_page_config(page_title="Hebo — AI Voice Assistant", page_icon="🤖", layout="centered")
-
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
-LLM_MODEL = "llama-3.3-70b-versatile"
 WHISPER_MODEL = "whisper-large-v3-turbo"
+MODEL_OPTIONS = {
+    "🧠 Smart (70B) — best quality": "llama-3.3-70b-versatile",
+    "⚡ Fast (8B) — instant replies": "llama-3.1-8b-instant",
+}
 
 if not GROQ_API_KEY:
     st.error(
@@ -41,26 +96,60 @@ if not GROQ_API_KEY:
 
 client = Groq(api_key=GROQ_API_KEY)
 
-SYSTEM_PROMPT = """You are Hebo, a helpful, friendly, and highly capable AI voice assistant.
-You can hold natural conversations, answer questions, reason through problems, and use tools
-(like live web search) when you need current information you don't already know.
-Since your replies are often read aloud, keep them natural, warm, and reasonably concise
-unless the user asks for something detailed.
+SYSTEM_PROMPT = """You are Hebo — a sharp, no-fluff AI assistant with three areas of deep expertise:
+
+1. TRADING & MARKETS: You understand technical analysis, risk management, position sizing,
+   market structure, macro factors, and common strategies across stocks, crypto, and forex.
+   You explain concepts clearly and give balanced, educational information — not confident
+   "buy/sell now" calls. You always note that markets are risky, past performance doesn't
+   guarantee future results, and you are not a licensed financial advisor, so the user should
+   do their own research and/or consult a professional before risking real money.
+
+2. WEALTH-BUILDING & SUCCESS MINDSET: You coach on financial discipline, income growth,
+   saving/investing habits, entrepreneurship, productivity, and mental resilience. You're
+   motivating but realistic — no empty hype, no guaranteed-riches promises. You give concrete,
+   actionable steps, not vague platitudes.
+
+3. CODING: You are an expert software engineer across Python, JavaScript/TypeScript, web dev,
+   and general CS fundamentals. You write clean, correct, well-commented code, explain your
+   reasoning briefly, and proactively point out bugs, edge cases, or better approaches.
+
+General style: Be direct, confident, and warm — like a smart friend who tells you the truth.
+Keep spoken replies natural and conversational since they're often read aloud; keep text
+replies well-formatted with headers/bullets/code blocks when useful. Use tools (web search)
+when you need current information — prices, news, recent events — rather than guessing.
 Today's date is {date}.
 """
 
 # ----------------------------------------------------------------------
-# SESSION STATE
+# SESSION STATE — multi-chat support
 # ----------------------------------------------------------------------
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(date=datetime.date.today())}
-    ]
+def new_chat():
+    cid = str(uuid.uuid4())[:8]
+    st.session_state.chats[cid] = {
+        "title": "New chat",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT.format(date=datetime.date.today())}
+        ],
+    }
+    st.session_state.current_chat = cid
+
+
+if "chats" not in st.session_state:
+    st.session_state.chats = {}
+    new_chat()
 if "voice_enabled" not in st.session_state:
     st.session_state.voice_enabled = True
+if "call_mode" not in st.session_state:
+    st.session_state.call_mode = False
+if "model_choice" not in st.session_state:
+    st.session_state.model_choice = MODEL_OPTIONS["🧠 Smart (70B) — best quality"]
+
+current = st.session_state.chats[st.session_state.current_chat]
+messages = current["messages"]
 
 # ----------------------------------------------------------------------
-# TOOLS (this is what makes Hebo an "agent" instead of a plain chatbot)
+# TOOLS
 # ----------------------------------------------------------------------
 def web_search(query: str, max_results: int = 4) -> str:
     """Free web search via DuckDuckGo — no API key required."""
@@ -82,7 +171,7 @@ TOOLS = [
         "function": {
             "name": "web_search",
             "description": (
-                "Search the live web for current events, facts, prices, or anything "
+                "Search the live web for current events, prices, news, or anything "
                 "Hebo doesn't already know or that may have changed recently."
             ),
             "parameters": {
@@ -93,25 +182,21 @@ TOOLS = [
         },
     }
 ]
-
 AVAILABLE_FUNCTIONS = {"web_search": web_search}
 
 # ----------------------------------------------------------------------
-# SPEECH TO TEXT
+# STT / TTS
 # ----------------------------------------------------------------------
 def transcribe_audio(audio_bytes: bytes) -> str:
     try:
         transcription = client.audio.transcriptions.create(
-            file=("audio.wav", audio_bytes),
-            model=WHISPER_MODEL,
+            file=("audio.wav", audio_bytes), model=WHISPER_MODEL
         )
         return transcription.text
     except Exception as e:
         return f"[Transcription error: {e}]"
 
-# ----------------------------------------------------------------------
-# TEXT TO SPEECH
-# ----------------------------------------------------------------------
+
 def synthesize_speech(text: str) -> bytes:
     try:
         tts = gTTS(text=text, lang="en")
@@ -129,98 +214,139 @@ def autoplay_audio(audio_bytes: bytes):
         return
     b64 = base64.b64encode(audio_bytes).decode()
     st.markdown(
-        f'<audio autoplay controls src="data:audio/mp3;base64,{b64}"></audio>',
-        unsafe_allow_html=True,
+        f'<audio autoplay src="data:audio/mp3;base64,{b64}"></audio>', unsafe_allow_html=True
     )
 
 # ----------------------------------------------------------------------
-# LLM CALL (with tool-calling loop)
+# LLM CALL (tool-calling loop)
 # ----------------------------------------------------------------------
-def get_hebo_response(messages):
+def get_hebo_response(msgs, model):
     response = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=messages,
-        tools=TOOLS,
-        tool_choice="auto",
-        temperature=0.7,
-        max_tokens=1024,
+        model=model, messages=msgs, tools=TOOLS, tool_choice="auto",
+        temperature=0.7, max_tokens=1024,
     )
     msg = response.choices[0].message
 
     if msg.tool_calls:
-        messages.append(msg)
+        msgs.append(msg)
         for tool_call in msg.tool_calls:
             fn_name = tool_call.function.name
             fn_args = json.loads(tool_call.function.arguments)
             result = AVAILABLE_FUNCTIONS[fn_name](**fn_args)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": fn_name,
-                    "content": result,
-                }
+            msgs.append(
+                {"role": "tool", "tool_call_id": tool_call.id, "name": fn_name, "content": result}
             )
-        second_response = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=messages,
-            temperature=0.7,
-            max_tokens=1024,
+        second = client.chat.completions.create(
+            model=model, messages=msgs, temperature=0.7, max_tokens=1024
         )
-        return second_response.choices[0].message.content
-
+        return second.choices[0].message.content
     return msg.content
 
-# ----------------------------------------------------------------------
-# UI
-# ----------------------------------------------------------------------
-st.title("🤖 Hebo — Your AI Voice Assistant")
-st.caption("Fast, free, and always listening. Powered by Groq + Streamlit.")
 
-with st.sidebar:
-    st.header("⚙️ Settings")
-    st.session_state.voice_enabled = st.toggle("🔊 Voice replies", value=True)
-    if st.button("🗑️ Clear conversation"):
-        st.session_state.messages = st.session_state.messages[:1]
-        st.rerun()
-    st.markdown("---")
-    st.markdown("**Brain:** Llama 3.3 70B via Groq")
-    st.markdown("**Ears:** Whisper Large v3 Turbo via Groq")
-    st.markdown("**Voice:** Google TTS (free)")
-    st.markdown("**Tools:** Live web search (DuckDuckGo)")
-
-# Render chat history
-for m in st.session_state.messages[1:]:
-    if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str):
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
-
-col1, col2 = st.columns([1, 5])
-with col1:
-    st.write("")
-    audio_bytes = audio_recorder(text="", icon_size="2x", key="recorder")
-with col2:
-    text_input = st.chat_input("Type a message to Hebo, or use the mic →")
-
-user_text = None
-if audio_bytes:
-    with st.spinner("🎙️ Transcribing..."):
-        user_text = transcribe_audio(audio_bytes)
-if text_input:
-    user_text = text_input
-
-if user_text:
-    with st.chat_message("user"):
+def handle_user_message(user_text: str):
+    with st.chat_message("user", avatar="🧑"):
         st.markdown(user_text)
-    st.session_state.messages.append({"role": "user", "content": user_text})
+    messages.append({"role": "user", "content": user_text})
 
-    with st.chat_message("assistant"):
+    if current["title"] == "New chat":
+        current["title"] = user_text[:40] + ("..." if len(user_text) > 40 else "")
+
+    with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("💭 Hebo is thinking..."):
-            reply = get_hebo_response(st.session_state.messages)
+            reply = get_hebo_response(messages, st.session_state.model_choice)
         st.markdown(reply)
-        st.session_state.messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "assistant", "content": reply})
 
         if st.session_state.voice_enabled:
             with st.spinner("🔊 Generating voice..."):
                 audio_out = synthesize_speech(reply)
             autoplay_audio(audio_out)
+
+# ----------------------------------------------------------------------
+# SIDEBAR
+# ----------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### 🤖 Hebo")
+    if st.button("➕ New chat"):
+        new_chat()
+        st.rerun()
+
+    st.markdown("---")
+    st.caption("CHATS")
+    for cid, chat in list(st.session_state.chats.items())[::-1]:
+        label = ("📍 " if cid == st.session_state.current_chat else "") + chat["title"]
+        if st.button(label, key=f"switch_{cid}"):
+            st.session_state.current_chat = cid
+            st.rerun()
+
+    st.markdown("---")
+    st.caption("SETTINGS")
+    st.session_state.model_choice = MODEL_OPTIONS[
+        st.selectbox("Model", list(MODEL_OPTIONS.keys()))
+    ]
+    st.session_state.voice_enabled = st.toggle("🔊 Voice replies", value=True)
+    st.session_state.call_mode = st.toggle("📞 Call mode", value=False)
+
+    if len(st.session_state.chats) > 1 and st.button("🗑️ Delete this chat"):
+        del st.session_state.chats[st.session_state.current_chat]
+        st.session_state.current_chat = list(st.session_state.chats.keys())[-1]
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown(
+        '<span class="hebo-badge">Llama 3 · Groq</span>'
+        '<span class="hebo-badge">Whisper STT</span>'
+        '<span class="hebo-badge">Free</span>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "⚠️ Hebo's trading/finance info is educational only — not financial advice. "
+        "Always do your own research."
+    )
+
+# ----------------------------------------------------------------------
+# MAIN AREA
+# ----------------------------------------------------------------------
+st.title("🤖 Hebo")
+st.caption("Your trading, wealth-mindset & coding co-pilot — fast, free, voice-enabled.")
+
+for m in messages[1:]:
+    if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str):
+        avatar = "🧑" if m["role"] == "user" else "🤖"
+        with st.chat_message(m["role"], avatar=avatar):
+            st.markdown(m["content"])
+
+# ----------------------------------------------------------------------
+# INPUT AREA — call mode vs normal mode
+# ----------------------------------------------------------------------
+if st.session_state.call_mode:
+    st.markdown('<p class="call-status">📞 Call mode is live — Hebo is listening. Just speak, pause when done, and it replies out loud, then listens again automatically.</p>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([2, 1, 2])
+    with c2:
+        audio_bytes = audio_recorder(
+            text="", icon_size="3x", key="call_recorder",
+            pause_threshold=2.0, energy_threshold=0.01, auto_start=True,
+        )
+    if audio_bytes:
+        with st.spinner("🎙️ Listening..."):
+            user_text = transcribe_audio(audio_bytes)
+        if user_text and not user_text.startswith("[Transcription error") and user_text.strip():
+            handle_user_message(user_text)
+        st.rerun()
+else:
+    col1, col2 = st.columns([1, 6])
+    with col1:
+        st.write("")
+        audio_bytes = audio_recorder(text="", icon_size="2x", key="recorder", pause_threshold=2.0)
+    with col2:
+        text_input = st.chat_input("Message Hebo — trading, mindset, code, anything...")
+
+    user_text = None
+    if audio_bytes:
+        with st.spinner("🎙️ Transcribing..."):
+            user_text = transcribe_audio(audio_bytes)
+    if text_input:
+        user_text = text_input
+
+    if user_text:
+        handle_user_message(user_text)
